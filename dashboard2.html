@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IoT Security Dashboard Lite</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --primary: #2c3e50;
+            --success: #28a745;
+            --danger: #dc3545;
+            --bg: #f4f7f9;
+        }
+        body { 
+            font-family: 'Segoe UI', Tahoma, sans-serif; 
+            background: var(--bg); 
+            margin: 0; padding: 15px; 
+            color: #333;
+        }
+        .container { max-width: 900px; margin: auto; }
+        
+        header { text-align: center; margin-bottom: 25px; }
+        header h1 { margin: 5px 0; font-size: 26px; color: var(--primary); }
+
+        /* Alert Box */
+        #alertBox { 
+            display: none; 
+            background: var(--danger); 
+            color: white; 
+            padding: 20px; 
+            font-size: 20px; 
+            font-weight: bold; 
+            border-radius: 12px; 
+            margin-bottom: 20px; 
+            text-align: center;
+            animation: blink 0.8s infinite; 
+            box-shadow: 0 4px 15px rgba(220, 53, 69, 0.4);
+        }
+        @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+
+        /* Grid System */
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        @media (max-width: 650px) { .grid { grid-template-columns: 1fr; } }
+
+        .card { 
+            background: white; 
+            padding: 25px; 
+            border-radius: 18px; 
+            box-shadow: 0 10px 20px rgba(0,0,0,0.05); 
+            text-align: center;
+        }
+        
+        /* Status Display */
+        .status-display { font-size: 36px; font-weight: 800; margin: 20px 0; }
+        .mode-normal { color: var(--success); }
+        .mode-off { color: var(--danger); }
+
+        /* Control Buttons */
+        .btn-group { display: flex; flex-direction: column; gap: 12px; }
+        .cmd-btn { 
+            padding: 18px; border: none; border-radius: 10px; 
+            cursor: pointer; color: white; font-weight: bold; 
+            transition: 0.3s; font-size: 16px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .cmd-btn:hover { opacity: 0.9; transform: translateY(-2px); }
+        .cmd-btn:active { transform: translateY(0); }
+        .btn-normal { background: var(--success); }
+        .btn-off { background: var(--danger); }
+
+        /* Chart Section */
+        .chart-card { grid-column: span 2; }
+        @media (max-width: 650px) { .chart-card { grid-column: span 1; } }
+        .chart-container { height: 280px; width: 100%; margin-top: 15px; }
+
+        .data-label { color: #7f8c8d; font-size: 14px; margin-bottom: 5px; }
+        .data-value { font-size: 28px; font-weight: bold; color: var(--primary); }
+        .footer-note { font-size: 12px; color: #95a5a6; margin-top: 25px; text-align: center; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>🛡️ Security Command Center</h1>
+    </header>
+    
+    <div id="alertBox">⚠️ DETECTED: ตรวจพบการบุกรุก! ⚠️</div>
+
+    <div class="grid">
+        <div class="card">
+            <h3>โหมดการทำงาน</h3>
+            <div id="currentStatus" class="status-display mode-normal">LOADING...</div>
+            <div class="btn-group">
+                <button onclick="sendCommand('NORMAL')" class="cmd-btn btn-normal">SET NORMAL (เปิดระบบ)</button>
+                <button onclick="sendCommand('OFF')" class="cmd-btn btn-off">SYSTEM OFF (ปิดระบบ)</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>ข้อมูลเซนเซอร์ล่าสุด</h3>
+            <div style="margin: 20px 0;">
+                <div class="data-label">ระยะห่างปัจจุบัน</div>
+                <div id="distVal" class="data-value">--</div> 
+                <span style="font-size: 16px; color: #7f8c8d;">cm</span>
+            </div>
+            <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+            <p style="font-size: 14px;">ซิงค์ข้อมูลล่าสุด: <span id="syncTime">--:--:--</span></p>
+            <p id="offWarning" style="color: var(--danger); display: none; font-weight: bold;">❌ ระบบปิดอยู่ (โหมดประหยัดพลังงาน)</p>
+        </div>
+
+        <div class="card chart-card">
+            <h3>Distance Monitoring (Live)</h3>
+            <div class="chart-container">
+                <canvas id="distChart"></canvas>
+            </div>
+        </div>
+    </div>
+    
+    <p class="footer-note">Real-time Data via Google Sheets API • อัปเดตทุก 5 วินาที</p>
+</div>
+
+<script>
+    // ⚠️ นำ URL จาก Google Apps Script (ที่ Deploy แล้ว) มาวางที่นี่
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbx6hBz2SpfdNSrj76-2-XOBoi1vAv0P1lPdI4vvP96RcpVK8ffkH7CCwdLM-EDtck04uQ/exec";
+
+    // --- ตั้งค่ากราฟ Chart.js ---
+    const ctx = document.getElementById('distChart').getContext('2d');
+    const distChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Distance (cm)',
+                borderColor: '#3498db',
+                backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                data: [],
+                fill: true,
+                tension: 0.4,
+                borderWidth: 3,
+                pointRadius: 0
+            }]
+        },
+        options: { 
+            responsive: true, 
+            maintainAspectRatio: false,
+            scales: { 
+                y: { beginAtZero: true, max: 100, grid: { color: '#f0f0f0' } },
+                x: { grid: { display: false } }
+            },
+            plugins: { legend: { display: false } }
+        }
+    });
+
+    // --- ฟังก์ชันดึงข้อมูลจาก Cloud ---
+    function updateDashboard() {
+        fetch(GAS_URL + "?fetch=true")
+        .then(res => res.json())
+        .then(data => {
+            const statusBox = document.getElementById('currentStatus');
+            const distText = document.getElementById('distVal');
+            const offWarning = document.getElementById('offWarning');
+            const alertBox = document.getElementById('alertBox');
+            
+            // 1. อัปเดตสถานะโหมด (NORMAL/OFF)
+            const currentMode = data.command || "NORMAL";
+            statusBox.innerText = currentMode;
+            statusBox.className = "status-display mode-" + currentMode.toLowerCase();
+
+            if(currentMode === "OFF") {
+                offWarning.style.display = 'block';
+                distText.innerText = "--";
+                alertBox.style.display = 'none';
+                distText.style.color = "#bdc3c7";
+            } else {
+                offWarning.style.display = 'none';
+                distText.innerText = data.distance || 0;
+                distText.style.color = "var(--primary)";
+
+                // 2. จัดการการแจ้งเตือน (Alert) เมื่อระยะต่ำกว่า 25cm
+                if(data.distance > 0 && data.distance < 25) {
+                    alertBox.style.display = 'block';
+                } else {
+                    alertBox.style.display = 'none';
+                }
+
+                // 3. อัปเดตกราฟ
+                let now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                distChart.data.labels.push(now);
+                distChart.data.datasets[0].data.push(data.distance);
+                
+                if(distChart.data.labels.length > 20) {
+                    distChart.data.labels.shift();
+                    distChart.data.datasets[0].data.shift();
+                }
+                distChart.update();
+            }
+
+            document.getElementById('syncTime').innerText = new Date().toLocaleTimeString();
+        })
+        .catch(err => console.error("Fetch error:", err));
+    }
+
+    // --- ส่งคำสั่งเปลี่ยนโหมด ---
+    function sendCommand(cmd) {
+        // ใช้โหมด no-cors เพื่อให้ส่งคำสั่งไปได้โดยไม่ติดปัญหาความปลอดภัยของเบราว์เซอร์
+        fetch(GAS_URL + "?action=" + cmd, { mode: 'no-cors' })
+        .then(() => {
+            console.log("Command sent: " + cmd);
+            // อัปเดตหน้าจอทันทีเพื่อความรวดเร็ว
+            setTimeout(updateDashboard, 800);
+        })
+        .catch(err => console.error("Error sending command:", err));
+    }
+
+    // เริ่มทำงานครั้งแรก และตั้งรอบการอัปเดต
+    updateDashboard();
+    setInterval(updateDashboard, 5000); // อัปเดตทุก 5 วินาที
+</script>
+
+</body>
+</html>
